@@ -1,0 +1,6 @@
+gear/__pycache__/*
+gear/storage/__pycache__/*
+gear/stat/__pycache__/*
+gear/tools/__pycache__/*
+tests/__pycache__/*
+.vscode
