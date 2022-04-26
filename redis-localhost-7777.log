@@ -1,0 +1,27 @@
+28818:C 26 Apr 2022 19:47:48.266 # oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo
+28818:C 26 Apr 2022 19:47:48.266 # Redis version=6.2.6, bits=64, commit=00000000, modified=0, pid=28818, just started
+28818:C 26 Apr 2022 19:47:48.266 # Configuration loaded
+28818:M 26 Apr 2022 19:47:48.267 * monotonic clock: POSIX clock_gettime
+28818:M 26 Apr 2022 19:47:48.268 * Running mode=standalone, port=7777.
+28818:M 26 Apr 2022 19:47:48.268 # Server initialized
+28818:M 26 Apr 2022 19:47:48.268 * Ready to accept connections
+28818:M 26 Apr 2022 19:47:50.265 # User requested shutdown...
+28818:M 26 Apr 2022 19:47:50.265 * Saving the final RDB snapshot before exiting.
+28818:M 26 Apr 2022 19:47:50.266 * DB saved on disk
+28818:M 26 Apr 2022 19:47:50.266 # Redis is now ready to exit, bye bye...
+28903:C 26 Apr 2022 19:52:16.848 # oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo
+28903:C 26 Apr 2022 19:52:16.848 # Redis version=6.2.6, bits=64, commit=00000000, modified=0, pid=28903, just started
+28903:C 26 Apr 2022 19:52:16.848 # Configuration loaded
+28903:M 26 Apr 2022 19:52:16.849 * monotonic clock: POSIX clock_gettime
+28903:M 26 Apr 2022 19:52:16.850 * Running mode=standalone, port=7777.
+28903:M 26 Apr 2022 19:52:16.850 # Server initialized
+28903:M 26 Apr 2022 19:52:16.850 * Loading RDB produced by version 6.2.6
+28903:M 26 Apr 2022 19:52:16.850 * RDB age 266 seconds
+28903:M 26 Apr 2022 19:52:16.850 * RDB memory usage when created 1.09 Mb
+28903:M 26 Apr 2022 19:52:16.850 # Done loading RDB, keys loaded: 0, keys expired: 0.
+28903:M 26 Apr 2022 19:52:16.850 * DB loaded from disk: 0.000 seconds
+28903:M 26 Apr 2022 19:52:16.851 * Ready to accept connections
+28903:M 26 Apr 2022 19:52:18.842 # User requested shutdown...
+28903:M 26 Apr 2022 19:52:18.842 * Saving the final RDB snapshot before exiting.
+28903:M 26 Apr 2022 19:52:18.844 * DB saved on disk
+28903:M 26 Apr 2022 19:52:18.844 # Redis is now ready to exit, bye bye...

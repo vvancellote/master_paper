@@ -82,7 +82,7 @@ class DataStorage(object):
         return f"{t.__name__}({self.host},{self.port})"
 
     def __map_key(self, key: str, coding: StoreType) -> str:
-        """Update L1 key cache and map external key to internal with coding type
+        """Update L1 key cache only with key to internal with coding type
 
         Args:
             key (str): external key
@@ -323,6 +323,7 @@ class DataStorage(object):
         """
         # Creates a internal key representation with User's key and Store Type Encoding
         mapped_key = self.__map_key(key, StoreType.PLAIN)
+        self.con.hset(self.store_name, key, self.keyname_map[key])
         # Increment the current counter on key
         val = self.con.incr(mapped_key)
         # Build the returning unique id
