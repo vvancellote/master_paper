@@ -58,7 +58,7 @@ class DataStorage(object):
             host (str, optional): Host where the RedisServer is running. Defaults to "localhost".
             port (int, optional): Port number to be used contating the RedisServer. Defaults to 6379.
         """
-        # Init classe's local status
+        # Init object's local status
         self.con = redis.Redis(host=host, port=port, db=0)
         self.store_name = store_name
         self.host = host
@@ -286,7 +286,7 @@ class DataStorage(object):
             datum (Any): datum to be enqueued
             coding (StoreType, optional): The encoding type to be used. Defaults to StoreType.COMPRESSED.
         """
-        # Creates a internal key representation with User's key and Store Type Encoding
+        # Creates an internal key representation with User's key and Store Type Encoding
         mapped_key = self.__map_key(key, coding)
         # Encode the data and push it into the queue
         encoded_data = self.serializer[coding.value].encode(datum)
