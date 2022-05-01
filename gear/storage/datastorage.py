@@ -25,7 +25,7 @@ __email__ = "d.carvalho@ieee.org"
 __status__ = "Research"
 
 from typing import Any, List
-from gear.tools.serializer import (
+from workflowgear.gear.tools.serializer import (
     CompactedPicklerSerializer,
     PicklerSerializer,
     CloudPicklerSerializer,
@@ -91,12 +91,12 @@ class DataStorage(object):
         Returns:
             str: returns a string with the mapped key
         """
-        self.keyname_map[key] = coding.value  # Update L1 cache
+        self.keyname_map[key] = coding.value  # Update L1 metadata cache
         mapped_key = f"{key}:{coding.value}"  # Build the external key
         return mapped_key
 
     def __find_mapped_key(self, key: str) -> str:
-        """Find the internal key representation with coding (in the format "key:coding")
+        """Find the internal key representation (with coding in the format "key:coding")
 
         Args:
             key (str): the user key representation
@@ -104,22 +104,20 @@ class DataStorage(object):
         Returns:
             str: returns a pair with (mapped_key, coding value) or (None, None) if it fails
         """
-        mapped_key = None
-        coding = None
 
         # Check if the key is already on L1 cache
         if key not in self.keyname_map:
             # So, fetch the key from external store
-            coding = str(self.con.hmget(self.store_name, key)[0])
-            if coding is not None:
-                # Happy, since the key is outthere. Map it from the coding info
-                mapped_key = key
-                self.keyname_map[key] = coding
-            # Here, the key is not outthere, so None will be returned
-        else:
-            # The coding is already here, build a mapped key and its coding
-            mapped_key = f"{key}:{self.keyname_map[key]}"
-            coding = self.keyname_map[key]
+            ext_coding = self.con.hmget(self.store_name, key)
+            if ext_coding is None or ext_coding[0] is None:
+                # Here, the key is not outthere, so None will be returned
+                return None, None
+            else:
+                # Happy, since the key is outthere. Map it from the ext_coding info
+                self.keyname_map[key] = StoreType(int(ext_coding[0].decode())).value
+        # The coding is already here, build a mapped key and its coding
+        coding = self.keyname_map[key]
+        mapped_key = f"{key}:{coding}"
 
         return mapped_key, coding
 
@@ -134,7 +132,7 @@ class DataStorage(object):
         """
         # Try to fetch from the storage memory, return None if not found
         try:
-            ks = self.con.keys(key)
+            ks = self.con.keys(f"{key}")
         except:
             return None
 
@@ -334,9 +332,10 @@ class DataStorage(object):
 
         ret_keys = list()
         for i in reversed(ks):
-            mapped_key, _ = self.__find_mapped_key(i)
-            found_key = mapped_key.split(":")[0]
-            ret_keys.append(found_key)
+            key_name = i.split(":")[0]
+            mapped_key, _ = self.__find_mapped_key(key_name)
+            if mapped_key:
+                ret_keys.append(key_name)
         return ret_keys
 
     def delete(self, key: str) -> None:
