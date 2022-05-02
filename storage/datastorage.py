@@ -25,7 +25,7 @@ __email__ = "d.carvalho@ieee.org"
 __status__ = "Research"
 
 from typing import Any, List
-from workflowgear.gear.tools.serializer import (
+from tools.serializer import (
     CompactedPicklerSerializer,
     PicklerSerializer,
     CloudPicklerSerializer,
@@ -91,9 +91,13 @@ class DataStorage(object):
         Returns:
             str: returns a string with the mapped key
         """
-        self.keyname_map[key] = coding.value  # Update L1 metadata cache
-        mapped_key = f"{key}:{coding.value}"  # Build the external key
-        return mapped_key
+        assert key not in self.keyname_map
+        data_key = self.generate_unique_id(key)
+        self.keyname_map[key] = {
+            "data": data_key,
+            "coding": coding.value,
+        }  # Update L1 metadata cache
+        return data_key
 
     def __find_mapped_key(self, key: str) -> str:
         """Find the internal key representation (with coding in the format "key:coding")
@@ -108,16 +112,19 @@ class DataStorage(object):
         # Check if the key is already on L1 cache
         if key not in self.keyname_map:
             # So, fetch the key from external store
-            ext_coding = self.con.hmget(self.store_name, key)
-            if ext_coding is None or ext_coding[0] is None:
+            ext_data = self.con.hmget(key, ["data", "coding"])
+            if ext_data is None or ext_data[0] is None:
                 # Here, the key is not outthere, so None will be returned
                 return None, None
             else:
                 # Happy, since the key is outthere. Map it from the ext_coding info
-                self.keyname_map[key] = StoreType(int(ext_coding[0].decode())).value
+                self.keyname_map[key] = {
+                    "data": ext_data[0].decode(),
+                    "coding": int(ext_data[1].decode()),
+                }  # Update L1 metadata cache
         # The coding is already here, build a mapped key and its coding
-        coding = self.keyname_map[key]
-        mapped_key = f"{key}:{coding}"
+        mapped_key = self.keyname_map[key]["data"]
+        coding = self.keyname_map[key]["coding"]
 
         return mapped_key, coding
 
@@ -159,7 +166,7 @@ class DataStorage(object):
         # Initiate the communication pipeline
         pipeline = self.con.pipeline()
         # Encode and Store the datum. Update the key map store
-        pipeline.hset(self.store_name, key, self.keyname_map[key])
+        pipeline.hset(key, mapping=self.keyname_map[key])
         encoded_data = self.serializer[coding.value].encode(datum)
         pipeline.set(mapped_key, encoded_data)
         # Execute the communication pipeline
@@ -289,6 +296,7 @@ class DataStorage(object):
         # Encode the data and push it into the queue
         encoded_data = self.serializer[coding.value].encode(datum)
         self.con.rpush(mapped_key, encoded_data)
+        self.con.hset()
         return
 
     def dequeue(self, key: str, timeout: int = 0) -> Any:

@@ -27,7 +27,7 @@ __status__ = "Research"
 import pickle
 import cloudpickle
 from abc import ABC, abstractmethod
-from typing import Any, List
+
 
 import blosc
 
