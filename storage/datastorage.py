@@ -81,6 +81,21 @@ class DataStorage(object):
         t = type(self)
         return f"{t.__name__}({self.host},{self.port})"
 
+    def _generate_unique_id(self, key: str) -> str:
+        """Create a new unique id based on key
+
+        Args:
+            key (str): the basename of the unique id.
+
+        Returns:
+            str: A string based on the key with an unique interger
+        """
+        # Creates a internal key representation with User's key and Store Type Encoding
+        # Increment the current counter on key
+        val = self.con.incr(f"{self.store_name}:id")
+        # Build the returning unique id
+        return f"{key}:{val}"
+
     def __map_key(self, key: str, coding: StoreType) -> str:
         """Update L1 key cache only with key to internal with coding type
 
@@ -91,13 +106,20 @@ class DataStorage(object):
         Returns:
             str: returns a string with the mapped key
         """
-        assert key not in self.keyname_map
-        data_key = self.generate_unique_id(key)
-        self.keyname_map[key] = {
-            "data": data_key,
-            "coding": coding.value,
-        }  # Update L1 metadata cache
-        return data_key
+        k, c = self.__find_mapped_key(key)
+        if k is None:
+            data_key = self._generate_unique_id(f"/data/{key}")
+            self.keyname_map[key] = {
+                "data": data_key,
+                "coding": coding.value,
+            }  # Update L1 metadata cache
+        else:
+            self.keyname_map[key] = {
+                "data": k,
+                "coding": c,
+            }  # Update L1 metadata cache
+
+        return self.keyname_map[key]["data"]
 
     def __find_mapped_key(self, key: str) -> str:
         """Find the internal key representation (with coding in the format "key:coding")
@@ -152,7 +174,11 @@ class DataStorage(object):
 
     # Public methods
     def set(
-        self, key: str, datum: Any, coding: StoreType = StoreType.COMPRESSED
+        self,
+        key: str,
+        datum: Any,
+        coding: StoreType = StoreType.COMPRESSED,
+        ex: int = 3600,
     ) -> None:
         """Set the memory key with datum
 
@@ -160,6 +186,7 @@ class DataStorage(object):
             key (str): User key
             datum (Any): the datum
             coding (StoreType, optional): The encoding type to be used. Defaults to StoreType.COMPRESSED.
+            ex (int): expiration in seconds, default to 3600.
         """
         # Creates a internal key representation with User's key and Store Type Encoding
         mapped_key = self.__map_key(key, coding)
@@ -167,18 +194,23 @@ class DataStorage(object):
         pipeline = self.con.pipeline()
         # Encode and Store the datum. Update the key map store
         pipeline.hset(key, mapping=self.keyname_map[key])
+        pipeline.expire(key, ex)
         encoded_data = self.serializer[coding.value].encode(datum)
         pipeline.set(mapped_key, encoded_data)
+        pipeline.expire(mapped_key, ex)
         # Execute the communication pipeline
         pipeline.execute()
         return
 
-    def bulk_set(self, data: dict, coding: StoreType = StoreType.COMPRESSED) -> None:
+    def bulk_set(
+        self, data: dict, coding: StoreType = StoreType.COMPRESSED, ex: int = 3600
+    ) -> None:
         """Set various keys at the same time
 
         Args:
             data (dict): a dictionary where keys are keys and values are data
             coding (StoreType, optional): The encoding type to be used. Defaults to StoreType.COMPRESSED.
+            ex (int): expiration in seconds, default to 3600.
         """
         # Initiate the communication pipeline
         pipeline = self.con.pipeline()
@@ -187,18 +219,21 @@ class DataStorage(object):
             # Creates a internal key representation with User's key and Store Type Encoding
             mapped_key = self.__map_key(k, coding)
             # Encode and Store the datum. Update the key map store
-            pipeline.hset(self.store_name, k, self.keyname_map[k])
+            pipeline.hset(k, mapping=self.keyname_map[k])
+            pipeline.expire(k, ex)
             encoded_data = self.serializer[coding.value].encode(v)
             pipeline.set(mapped_key, encoded_data)
+            pipeline.expire(mapped_key, ex)
         # Execute the communication pipeline
         pipeline.execute()
         return
 
-    def get(self, key: str) -> Any:
+    def get(self, key: str, ex: int = 3600) -> Any:
         """get a data stored into a key in the storage memory
 
         Args:
             key (str): the key to look for
+            ex (int): expiration in seconds, default to 3600.
 
         Returns:
             Any: None if not found, the stored value otherwise
@@ -211,35 +246,49 @@ class DataStorage(object):
 
         # So, we have a key, let's look for a datum
         payload = self.con.get(mapped_key)
+        # Then, refresh both keys
+        self.con.expire(key, ex)
+        self.con.expire(mapped_key, ex)
         # if it is none, so this key is note in the storage memory... Return None
         # Actually, it should be an error, but forward it to the upper layers
         if payload is None:
             return None
-        # So, habemus datum, decode and return it
+        # So, habemus datum, decode, refresh both keys and return it
+        self.con.expire(key, ex)
+        self.con.expire(mapped_key, ex)
         return self.serializer[coding].decode(payload)
 
-    def sadd(self, key: str, datum: Any, coding: StoreType = StoreType.PLAIN) -> None:
+    def sadd(
+        self, key: str, datum: Any, coding: StoreType = StoreType.PLAIN, ex: int = 3600
+    ) -> None:
         """Add the datum to a memory Set
 
         Args:
             key (str): the user's key
             datum (Any): the datum to be inserted to the set
             coding (StoreType, optional): The encoding type. Defaults to StoreType.PLAIN.
+            ex (int): expiration in seconds, default to 3600.
         """
         # Creates a internal key representation with User's key and Store Type Encoding
         mapped_key = self.__map_key(key, coding)
         # Initiate the communication pipeline
         pipeline = self.con.pipeline()
         # Encode and Store the datum into the set key. Update the key map store
-        pipeline.hset(self.store_name, key, self.keyname_map[key])
+        pipeline.hset(key, mapping=self.keyname_map[key])
+        pipeline.expire(key, ex)
         encoded_data = self.serializer[coding.value].encode(datum)
         pipeline.sadd(mapped_key, encoded_data)
+        pipeline.expire(mapped_key, ex)
         # Execute the communication pipeline
         pipeline.execute()
         return
 
     def bulk_sadd(
-        self, key: str, data: set, coding: StoreType = StoreType.COMPRESSED
+        self,
+        key: str,
+        data: set,
+        coding: StoreType = StoreType.COMPRESSED,
+        ex: int = 3600,
     ) -> None:
         """Add bulk data into a memory set
 
@@ -247,16 +296,20 @@ class DataStorage(object):
             key (str): memory set key
             data (set): a set containing all elements to be stored in the memory set
             coding (StoreType, optional): The encoding type to be used. Defaults to StoreType.COMPRESSED.
+            ex (int): expiration in seconds, default to 3600.
         """
         # Initiate the communication pipeline
         pipeline = self.con.pipeline()
         # Create a internal key representation with User's key and Store Type Encoding
         mapped_key = self.__map_key(key, coding)
+        pipeline.hset(key, mapping=self.keyname_map[key])
+        pipeline.expire(key, ex)
         # Loop over the data set
         for v in data:
             # Encode and Store the datum. Update the key map store
             encoded_data = self.serializer[coding.value].encode(v)
             pipeline.sadd(mapped_key, encoded_data)
+        pipeline.expire(mapped_key, ex)
         # Execute the communication pipeline
         pipeline.execute()
         return
@@ -282,7 +335,11 @@ class DataStorage(object):
         return ret_val
 
     def enqueue(
-        self, key: str, datum: Any, coding: StoreType = StoreType.COMPRESSED
+        self,
+        key: str,
+        datum: Any,
+        coding: StoreType = StoreType.COMPRESSED,
+        ex: int = 3600,
     ) -> None:
         """Enqueue a datum into a queue
 
@@ -295,8 +352,10 @@ class DataStorage(object):
         mapped_key = self.__map_key(key, coding)
         # Encode the data and push it into the queue
         encoded_data = self.serializer[coding.value].encode(datum)
+        self.con.hset(key, mapping=self.keyname_map[key])
+        self.con.expire(key, ex)
         self.con.rpush(mapped_key, encoded_data)
-        self.con.hset()
+        self.con.expire(mapped_key, ex)
         return
 
     def dequeue(self, key: str, timeout: int = 0) -> Any:
@@ -318,23 +377,6 @@ class DataStorage(object):
             return self.serializer[coding].decode(item[1])
         return item
 
-    def generate_unique_id(self, key: str) -> str:
-        """Create a new unique id based on key
-
-        Args:
-            key (str): the basename of the unique id.
-
-        Returns:
-            str: A string based on the key with an unique interger
-        """
-        # Creates a internal key representation with User's key and Store Type Encoding
-        mapped_key = self.__map_key(key, StoreType.PLAIN)
-        self.con.hset(self.store_name, key, self.keyname_map[key])
-        # Increment the current counter on key
-        val = self.con.incr(mapped_key)
-        # Build the returning unique id
-        return f"{key}#{val}"
-
     def get_keys(self, key: str) -> List:
         ks = self.__read_keys_from_storage(f"{key}:*")
 
@@ -353,7 +395,7 @@ class DataStorage(object):
         mapped_key, _ = self.__find_mapped_key(key)
         if mapped_key:
             self.con.delete(mapped_key)
-            self.con.hdel(self.store_name, key)
+            self.con.delete(key)
             self.keyname_map.pop(key, None)
         return
 
