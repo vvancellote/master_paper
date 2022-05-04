@@ -2,6 +2,7 @@ import json
 import logging
 import sqlite3 as sql
 
+
 #
 # SetEncoder Class
 #

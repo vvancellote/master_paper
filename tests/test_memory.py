@@ -25,8 +25,8 @@ __email__ = "d.carvalho@ieee.org"
 __status__ = "Research"
 
 import gear.storage as ds
-import gear.tools.serializer as sz
 import gear.storage.memory as mm
+import gear.tools.serializer as sz
 
 
 def test_memory():

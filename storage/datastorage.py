@@ -24,18 +24,19 @@ __maintainer__ = "Diego Carvalho"
 __email__ = "d.carvalho@ieee.org"
 __status__ = "Research"
 
+import fnmatch
+from enum import Enum
 from typing import Any, List
 
-from sklearn.pipeline import Pipeline
-from tools.serializer import (
-    CompactedPicklerSerializer,
-    PicklerSerializer,
-    CloudPicklerSerializer,
-    NoneSerializer,
-)
 import redis
-from enum import Enum
-import fnmatch
+from aioredis import Pipeline
+
+from workflowgear.tools.serializer import (
+    CloudPicklerSerializer,
+    CompactedPicklerSerializer,
+    NoneSerializer,
+    PicklerSerializer,
+)
 
 
 class StoreType(Enum):
@@ -166,7 +167,8 @@ class DataStorage(object):
         mapped_key = self.__map_key(key, coding)
 
         # Encode and Store the datum into the set key. Update the key map store
-        pipe.hset(key, mapping=self.keyname_map[key])
+        for kk, vv in self.keyname_map[key].items():
+            pipe.hset(key, kk, vv)
         pipe.expire(key, ex)
         encoded_data = self.serializer[coding.value].encode(datum)
         pipe_func(mapped_key, encoded_data)
@@ -384,7 +386,7 @@ class DataStorage(object):
         # Try to fetch from the storage memory, return None if not found
         key_set = self.con.smembers(self.root_diretory)
         decoded_keys = list()
-        for i in reversed(key_set):
+        for i in sorted(list(key_set)):
             decoded_keys.append(i.decode())
 
         # Build and return a list of keys. Reversed to respect the creation order and

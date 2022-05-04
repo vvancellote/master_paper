@@ -25,11 +25,10 @@ __email__ = "d.carvalho@ieee.org"
 __status__ = "Research"
 
 import pickle
-import cloudpickle
 from abc import ABC, abstractmethod
 
-
 import blosc
+import cloudpickle
 
 
 class Serializer(ABC):
