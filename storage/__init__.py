@@ -24,6 +24,7 @@ __maintainer__ = "Diego Carvalho"
 __email__ = "d.carvalho@ieee.org"
 __status__ = "Research"
 
-from workflowgear.storage.datastorage import DataStorage, StoreType
+from .datastorage import DataStorage, StoreType
+from .sql import SqlStorage
 
-__all__ = ["DataStorage", StoreType]
+__all__ = [DataStorage, StoreType, SqlStorage]

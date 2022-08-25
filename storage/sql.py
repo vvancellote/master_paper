@@ -1,74 +1,42 @@
-import json
 import logging
 import sqlite3 as sql
-
-
-#
-# SetEncoder Class
-#
-class SetEncoder(json.JSONEncoder):
-    def default(self, obj):
-        if isinstance(obj, set):
-            return list(obj)
-        return json.JSONEncoder.default(self, obj)
+import pandas as pd
+from typing import Any
 
 
 class SqlStorage(object):
-    def __init__(self, db_name: str = "storageset.db") -> None:
-        self.bus_id_set = set()
-        self.db_connection = sql.connect(db_name)
-        query = f"""
-            CREATE TABLE METADATA (
-                DATE TEXT PRIMARY KEY, LINE TEXT, 
-                LATITUDE REAL, LONGITUDE REAL, VELOCITY REAL
-            ); 
-            """
+    def __init__(self, key: str, directory: str = "database") -> None:
+        self.key = key
+        self.db_name = f"{directory}/{key}.db"
+        self.db_connection = sql.connect(self.db_name)
+        return
+
+    def create_table(self, table_name: str, columns: str) -> None:
+        query = f"CREATE TABLE {table_name} ({columns});"
         self.db_connection.execute(query)
         return
 
-    def __len__(self) -> int:
-        return len(self.bus_id_set)
-
-    def __create_db_entry__(self, bus_id: str) -> None:
-        tag = bus_id.upper()
-        query = f"""
-            CREATE TABLE {tag} (
-                DATE TEXT PRIMARY KEY, LINE TEXT, 
-                LATITUDE REAL, LONGITUDE REAL, VELOCITY REAL
-            ); 
-            """
-        self.db_connection.execute(query)
-        return
-
-    def add(self, value) -> None:
-        obs_date, bus_id, bus_line, latitude, longitude, velocity = value
-        if bus_id not in self.bus_id_set:
-            self.bus_id_set.add(bus_id)
-            self.__create_db_entry__(bus_id)
-        tag = bus_id.upper()
-        query = f"""
-            INSERT INTO {tag} VALUES (
-                '{obs_date}', '{bus_line}', {latitude}, {longitude}, {velocity}
-            ); 
-            """
+    def insert_into(self, table_name: str, data: str) -> None:
+        query = f"INSERT INTO {table_name} VALUES ({data});"
         try:
             self.db_connection.execute(query)
         except sql.IntegrityError:
-            logging.info(f"Duplicated entry {value}")
+            # inserted a duplicate into a primary key column
+            raise sql.IntegrityError
+        except sql.OperationalError:
+            logging.info(
+                f"ERROR OperationalError: in ClusterDatabase - {self.db_name} TABLE:{table_name}, ({data})"
+            )
+        except ValueError:
+            logging.info(
+                f"ERROR ValueError: in ClusterDatabase - {self.db_name} TABLE:{table_name}, ({data})"
+            )
         return
 
-    def bulk_add(self, set_value: set) -> None:
-        for i in set_value:
-            self.add(i)
+    def fetch_dataframe(self, table_name: str) -> Any:
+        df = pd.read_sql(f"SELECT * FROM {table_name}", self.db_connection)
+        return df
 
-        self.db_connection.commit()
-        return
-
-    def len(self) -> int:
-        return len(self.bus_id_set)
-
-    def dump(self, file_name):
-        with open(file_name, "w") as f:
-            json.dump(self.bus_id_set, f, cls=SetEncoder)
+    def commit(self):
         self.db_connection.commit()
         return

@@ -2,3 +2,8 @@
 __pycache__
 .vscode
 .pytest_cache
+busdata
+busdata/*
+database
+database/*
+runinfo

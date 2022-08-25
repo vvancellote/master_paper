@@ -29,9 +29,10 @@ from enum import Enum
 from typing import Any, List
 
 import redis
-from aioredis import Pipeline
 
-from workflowgear.tools.serializer import (
+from aioredis.client import Pipeline
+
+from tools.serializer import (
     CloudPicklerSerializer,
     CompactedPicklerSerializer,
     NoneSerializer,
@@ -111,21 +112,23 @@ class DataStorage(object):
         """
 
         # Check if the key is already on L1 cache
-        if key not in self.keyname_map:
+        skey = key if type(key) is str else str(key, "utf-8")
+        if skey not in self.keyname_map:
             # So, fetch the key from external store
-            ext_data = self.con.hmget(key, ["data", "coding"])
+            k = f"{self.root_diretory}/{skey}"
+            ext_data = self.con.hmget(k, ["data", "coding"])
             if ext_data is None or ext_data[0] is None:
                 # Here, the key is not outthere, so None will be returned
                 return None, None
             else:
                 # Happy, since the key is outthere. Map it from the ext_coding info
-                self.keyname_map[key] = {
+                self.keyname_map[skey] = {
                     "data": ext_data[0].decode(),
                     "coding": int(ext_data[1].decode()),
                 }  # Update L1 metadata cache
         # The coding is already here, build a mapped key and its coding
-        mapped_key = self.keyname_map[key]["data"]
-        coding = self.keyname_map[key]["coding"]
+        mapped_key = self.keyname_map[skey]["data"]
+        coding = self.keyname_map[skey]["coding"]
 
         return mapped_key, coding
 
@@ -140,19 +143,20 @@ class DataStorage(object):
             str: returns a string with the mapped key
         """
         k, c = self.__find_mapped_key(key)
+        skey = key if type(key) is str else str(key, "utf-8")
         if k is None:
-            data_key = self._generate_unique_id(f"/{self.store_name}/data/{key}")
-            self.keyname_map[key] = {
+            data_key = f"/{self.store_name}/data/{skey}"
+            self.keyname_map[skey] = {
                 "data": data_key,
                 "coding": coding.value,
             }  # Update L1 metadata cache
         else:
-            self.keyname_map[key] = {
+            self.keyname_map[skey] = {
                 "data": k,
                 "coding": c,
             }  # Update L1 metadata cache
 
-        return self.keyname_map[key]["data"]
+        return self.keyname_map[skey]["data"]
 
     def _key_data_update(
         self,
@@ -164,12 +168,14 @@ class DataStorage(object):
         pipe_func,
     ):
         # Creates a internal key representation with User's key and Store Type Encoding
-        mapped_key = self.__map_key(key, coding)
+        skey = key if type(key) is str else str(key, "utf-8")
+        mapped_key = self.__map_key(skey, coding)
 
         # Encode and Store the datum into the set key. Update the key map store
-        for kk, vv in self.keyname_map[key].items():
-            pipe.hset(key, kk, vv)
-        pipe.expire(key, ex)
+        for kk, vv in self.keyname_map[skey].items():
+            k = f"{self.root_diretory}/{skey}"
+            pipe.hset(k, kk, vv)
+        pipe.expire(k, ex)
         encoded_data = self.serializer[coding.value].encode(datum)
         pipe_func(mapped_key, encoded_data)
         pipe.expire(mapped_key, ex)
@@ -397,21 +403,23 @@ class DataStorage(object):
         # try to find a key mapping in the L1 or in the external memory
         # if it has been found, delete the storage key, the key from the storage mapping
         # and from L1
-        mapped_key, _ = self.__find_mapped_key(key)
+        skey = key if type(key) is str else str(key, "utf-8")
+        mapped_key, _ = self.__find_mapped_key(skey)
         if mapped_key:
             with self.con.pipeline() as pipe:
+                k = f"{self.root_diretory}/{skey}"
                 pipe.delete(mapped_key)
-                pipe.delete(key)
-                pipe.srem(self.root_diretory, key)
+                pipe.delete(k)
+                pipe.srem(self.root_diretory, skey)
                 pipe.execute()
-            self.keyname_map.pop(key, None)
+            self.keyname_map.pop(skey, None)
 
         return
 
     def reset_datastore(self) -> None:
+        for k in self.con.smembers(self.root_diretory):
+            self.delete(k)
         with self.con.pipeline() as pipe:
-            for k in self.con.smembers(self.root_diretory):
-                pipe.delete(k)
             pipe.delete(self.unique_id_tag)
             pipe.delete(self.root_diretory)
             pipe.execute()
