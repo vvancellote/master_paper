@@ -96,16 +96,18 @@ def remove_done_workflow():
     if work_list == None:
         print("Empty worklist. Nothing to do.")
         return
-    status = memory.get_keys("STATUS:*")
+    status = memory.get_keys("STATUS-*")
     for i in status:
         item_to_remove = str(i[7:])
         print(f"Removing jornal {item_to_remove}.")
-        os.system(f"rm -f database/{item_to_remove}.db")
+        memory.delete(item_to_remove)
+        os.system(f"rm -f database/{item_to_remove}.feather")
 
-    for i in sorted(glob.glob("database/*.db")):
+    for i in sorted(glob.glob("database/*.feather")):
         item_to_remove = decode_meta_name(i)
         if item_to_remove in work_list:
             print(f"Removing processed file {item_to_remove}.")
+            memory.delete(item_to_remove)
             work_list.remove(item_to_remove)
     memory.set("WORKFLOW", work_list)
     return

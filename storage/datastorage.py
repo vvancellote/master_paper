@@ -24,9 +24,13 @@ __maintainer__ = "Diego Carvalho"
 __email__ = "d.carvalho@ieee.org"
 __status__ = "Research"
 
+import sys
 import fnmatch
+from io import BytesIO
 from enum import Enum
 from typing import Any, List
+
+from functools import lru_cache
 
 import redis
 
@@ -47,7 +51,14 @@ class StoreType(Enum):
     CODE = 3
 
 
-class DataStorage(object):
+class Borg:
+    _shared_state = {}
+
+    def __init__(self):
+        self.__dict__ = self._shared_state
+
+
+class DataStorage(Borg):
 
     # Constructor
     def __init__(
@@ -60,16 +71,28 @@ class DataStorage(object):
             host (str, optional): Host where the RedisServer is running. Defaults to "localhost".
             port (int, optional): Port number to be used contating the RedisServer. Defaults to 6379.
         """
+        super().__init__()
         # Init object's local status
-        self.con = redis.Redis(host=host, port=port, db=0)
+        self.con = redis.Redis(
+            host=host,
+            port=port,
+            db=0,
+            health_check_interval=30,
+            socket_timeout=10,
+            socket_keepalive=True,
+            socket_connect_timeout=10,
+            retry_on_timeout=True,
+        )
         self.store_name = store_name
         self.host = host
         self.port = port
         self.expire = ex
         self.root_diretory = f"/{self.store_name}/keys"
+        self.queue_diretory = f"/{self.store_name}/queue"
         self.unique_id_tag = f"/{self.store_name}/id"
         self.keyname_map = dict()
         self.serializer = dict()
+        self.chunk_size = 256 * 1024
 
         # Build the Serializer Virtual Table
         self.serializer[StoreType.NONE.value] = NoneSerializer()
@@ -86,21 +109,6 @@ class DataStorage(object):
         t = type(self)
         return f"{t.__name__}({self.store_name},{self.host},{self.port})"
 
-    def _generate_unique_id(self, key: str) -> str:
-        """Create a new unique id based on key
-
-        Args:
-            key (str): the basename of the unique id.
-
-        Returns:
-            str: A string based on the key with an unique interger
-        """
-        # Creates a internal key representation with User's key and Store Type Encoding
-        # Increment the current counter on key
-        val = self.con.incr(self.unique_id_tag)
-        # Build the returning unique id
-        return f"{key}:{val}"
-
     def __find_mapped_key(self, key: str) -> str:
         """Find the internal key representation (with coding in the format "key:coding")
 
@@ -116,47 +124,25 @@ class DataStorage(object):
         if skey not in self.keyname_map:
             # So, fetch the key from external store
             k = f"{self.root_diretory}/{skey}"
-            ext_data = self.con.hmget(k, ["data", "coding"])
+            ext_data = self.con.hmget(k, ["data", "dtsize", "coding", "chunks"])
             if ext_data is None or ext_data[0] is None:
                 # Here, the key is not outthere, so None will be returned
-                return None, None
+                return None, None, None, None
             else:
                 # Happy, since the key is outthere. Map it from the ext_coding info
                 self.keyname_map[skey] = {
                     "data": ext_data[0].decode(),
-                    "coding": int(ext_data[1].decode()),
+                    "dtsize": int(ext_data[1].decode()),
+                    "coding": int(ext_data[2].decode()),
+                    "chunks": int(ext_data[3].decode()),
                 }  # Update L1 metadata cache
         # The coding is already here, build a mapped key and its coding
         mapped_key = self.keyname_map[skey]["data"]
+        dtsize = self.keyname_map[skey]["dtsize"]
         coding = self.keyname_map[skey]["coding"]
+        chunks = self.keyname_map[skey]["chunks"]
 
-        return mapped_key, coding
-
-    def __map_key(self, key: str, coding: StoreType) -> str:
-        """Update L1 key cache only with key to internal with coding type
-
-        Args:
-            key (str): external key
-            coding (StoreType): coding type
-
-        Returns:
-            str: returns a string with the mapped key
-        """
-        k, c = self.__find_mapped_key(key)
-        skey = key if type(key) is str else str(key, "utf-8")
-        if k is None:
-            data_key = f"/{self.store_name}/data/{skey}"
-            self.keyname_map[skey] = {
-                "data": data_key,
-                "coding": coding.value,
-            }  # Update L1 metadata cache
-        else:
-            self.keyname_map[skey] = {
-                "data": k,
-                "coding": c,
-            }  # Update L1 metadata cache
-
-        return self.keyname_map[skey]["data"]
+        return mapped_key, dtsize, coding, chunks
 
     def _key_data_update(
         self,
@@ -165,24 +151,71 @@ class DataStorage(object):
         coding: StoreType,
         pipe: Pipeline,
         ex: int,
-        pipe_func,
+        update_func,
     ):
         # Creates a internal key representation with User's key and Store Type Encoding
+        encoded_data = self.serializer[coding.value].encode(datum)
+
+        s_datum = len(encoded_data)
+        chunks = int(s_datum / self.chunk_size)
+        tail_size = int(s_datum % self.chunk_size)
+
         skey = key if type(key) is str else str(key, "utf-8")
-        mapped_key = self.__map_key(skey, coding)
+        mapped_key = f"/{self.store_name}/data/{skey}"
+
+        self.keyname_map[skey] = {
+            "data": mapped_key,
+            "dtsize": s_datum,
+            "coding": coding.value,
+            "chunks": chunks,
+        }
 
         # Encode and Store the datum into the set key. Update the key map store
         for kk, vv in self.keyname_map[skey].items():
             k = f"{self.root_diretory}/{skey}"
             pipe.hset(k, kk, vv)
         pipe.expire(k, ex)
-        encoded_data = self.serializer[coding.value].encode(datum)
-        pipe_func(mapped_key, encoded_data)
-        pipe.expire(mapped_key, ex)
+
+        with BytesIO(encoded_data) as stream:
+            # Read every chunch from the DataStore
+            for this_chunk in range(chunks):
+                self.con.expire(f"{mapped_key}:{this_chunk}", self.expire)
+                buffer = stream.read(self.chunk_size)
+                update_func(f"{mapped_key}:{this_chunk}", buffer)
+            # Read the tail from the DataStore
+            if tail_size > 0:
+                self.con.expire(f"{mapped_key}:{chunks}", self.expire)
+                buffer = stream.read(tail_size)
+                update_func(f"{mapped_key}:{chunks}", buffer)
+
         # Update the central directory
         pipe.sadd(self.root_diretory, key)
         # Execute the communication pipeline
         return
+
+    def _key_data_get(self, key: str, get_func) -> Any:
+        # Get the internal key representation
+        mapped_key, data_size, coding, chunks = self.__find_mapped_key(key)
+
+        # Check if there is a datum named key in the DataStore
+        if mapped_key is None:
+            return None
+
+        encoded_data = bytes()
+        with BytesIO() as stream:
+            # Read every chunch from the DataStore
+            for this_chunk in range(chunks):
+                self.con.expire(f"{mapped_key}:{this_chunk}", self.expire)
+                buffer = get_func(f"{mapped_key}:{this_chunk}")
+                stream.write(buffer)
+            # Read the tail from the DataStore
+            if int(data_size % self.chunk_size) > 0:
+                self.con.expire(f"{mapped_key}:{chunks}", self.expire)
+                buffer = get_func(f"{mapped_key}:{chunks}")
+                stream.write(buffer)
+            encoded_data = stream.getvalue()
+
+        return encoded_data
 
     # Public methods
     def set(
@@ -203,32 +236,12 @@ class DataStorage(object):
         # Set the expiration
         ex = ex if ex else self.expire
 
+        if key in self.keyname_map:
+            self.delete(key)
+
         # Initiate the communication pipeline
         with self.con.pipeline() as pipe:
             self._key_data_update(key, datum, coding, pipe, ex, pipe.set)
-            # Execute the communication pipeline
-            pipe.execute()
-        return
-
-    def bulk_set(
-        self, data: dict, coding: StoreType = StoreType.COMPRESSED, ex: int = None
-    ) -> None:
-        """Set various keys at the same time
-
-        Args:
-            data (dict): a dictionary where keys are keys and values are data
-            coding (StoreType, optional): The encoding type to be used. Defaults to StoreType.COMPRESSED.
-            ex (int): expiration in seconds, default to 3600.
-        """
-
-        # Set the expiration
-        ex = ex if ex else self.expire
-
-        # Initiate the communication pipeline
-        with self.con.pipeline() as pipe:
-            # Loop over each key...
-            for k, v in data.items():
-                self._key_data_update(k, v, coding, pipe, ex, pipe.set)
             # Execute the communication pipeline
             pipe.execute()
         return
@@ -244,13 +257,13 @@ class DataStorage(object):
             Any: None if not found, the stored value otherwise
         """
         # try to find a key mapping in the L1 or in the external memory
-        mapped_key, coding = self.__find_mapped_key(key)
+        mapped_key, dtsize, coding, n_chunks = self.__find_mapped_key(key)
         # if it is none, no key has been found... Return None
         if not mapped_key:
             return None
 
         # So, we have a key, let's look for a datum
-        payload = self.con.get(mapped_key)
+        payload = self._key_data_get(key, self.con.get)
         # if it is none, so this key is note in the storage memory... Return None
         # Actually, it should be an error, but forward it to the upper layers
         if payload is None:
@@ -259,126 +272,6 @@ class DataStorage(object):
         self.con.expire(key, ex)
         self.con.expire(mapped_key, ex)
         return self.serializer[coding].decode(payload)
-
-    def sadd(
-        self, key: str, datum: Any, coding: StoreType = StoreType.PLAIN, ex: int = 3600
-    ) -> None:
-        """Add the datum to a memory Set
-
-        Args:
-            key (str): the user's key
-            datum (Any): the datum to be inserted to the set
-            coding (StoreType, optional): The encoding type. Defaults to StoreType.PLAIN.
-            ex (int): expiration in seconds, default to 3600.
-        """
-        # Set the expiration
-        ex = ex if ex else self.expire
-
-        # Initiate the communication pipeline
-        with self.con.pipeline() as pipe:
-            self._key_data_update(key, datum, coding, pipe, ex, pipe.sadd)
-            pipe.execute()
-        return
-
-    def bulk_sadd(
-        self,
-        key: str,
-        data: set,
-        coding: StoreType = StoreType.COMPRESSED,
-        ex: int = 3600,
-    ) -> None:
-        """Add bulk data into a memory set
-
-        Args:
-            key (str): memory set key
-            data (set): a set containing all elements to be stored in the memory set
-            coding (StoreType, optional): The encoding type to be used. Defaults to StoreType.COMPRESSED.
-            ex (int): expiration in seconds, default to 3600.
-        """
-        # Initiate the communication pipeline
-        with self.con.pipeline() as pipe:
-            # Create a internal key representation with User's key and Store Type Encoding
-            mapped_key = self.__map_key(key, coding)
-            pipe.hset(key, mapping=self.keyname_map[key])
-            pipe.expire(key, ex)
-            # Loop over the data set
-            for v in data:
-                # Encode and Store the datum. Update the key map store
-                encoded_data = self.serializer[coding.value].encode(v)
-                pipe.sadd(mapped_key, encoded_data)
-            pipe.expire(mapped_key, ex)
-            pipe.sadd(self.root_diretory, key)
-            # Execute the communication pipeline
-            pipe.execute()
-        return
-
-    def smembers(self, key: str) -> List:
-        """Fetch all members of the set named key
-
-        Args:
-            key (str): set name
-
-        Returns:
-            List: List with all members in the set. None if there is no such set
-        """
-        # try to find a key mapping in the L1 or in the external memory
-        mapped_key, coding = self.__find_mapped_key(key)
-        # try to fetch a set from the storage memory
-        from_store = self.con.smembers(mapped_key)
-
-        # Loop over the returned list and decode each datum.
-        ret_val = list()
-        for i in from_store:
-            ret_val.append(self.serializer[coding].decode(i))
-        return ret_val
-
-    def enqueue(
-        self,
-        key: str,
-        datum: Any,
-        coding: StoreType = StoreType.COMPRESSED,
-        ex: int = 3600,
-    ) -> None:
-        """Enqueue a datum into a queue
-
-        Args:
-            key (str): key is the queue name
-            datum (Any): datum to be enqueued
-            coding (StoreType, optional): The encoding type to be used. Defaults to StoreType.COMPRESSED.
-        """
-        # Creates an internal key representation with User's key and Store Type Encoding
-        mapped_key = self.__map_key(key, coding)
-        # Encode the data and push it into the queue
-        encoded_data = self.serializer[coding.value].encode(datum)
-
-        with self.con.pipeline() as pipe:
-            pipe.hset(key, mapping=self.keyname_map[key])
-            pipe.expire(key, ex)
-            pipe.rpush(mapped_key, encoded_data)
-            pipe.expire(mapped_key, ex)
-            pipe.sadd(self.root_diretory, key)
-            pipe.execute()
-
-        return
-
-    def dequeue(self, key: str, timeout: int = 0) -> Any:
-        """Dequeue an item from the queue
-
-        Args:
-            key (str): key is the queue name
-            timeout (int, optional): Timeout in seconds (if the queue is empty). Defaults to 0 that means: wait for ever.
-
-        Returns:
-            Any: The datum dequeued from the queue, otherwise None
-        """
-        # try to find a key mapping in the L1 or in the external memory
-        mapped_key, coding = self.__find_mapped_key(key)
-        # try to pop an element from the queue
-        item = self.con.blpop(mapped_key, timeout)
-        # if found, decode the datum, else, return None
-        if item:
-            return self.serializer[coding].decode(item[1])
-        return item
 
     def get_keys(self, wkey: str) -> List:
         """Retrung arbitrary filtered key list from the storage memory
@@ -399,16 +292,88 @@ class DataStorage(object):
         # decoded from bytes to strings
         return fnmatch.filter(decoded_keys, wkey)
 
+    def enqueue(
+        self,
+        key: str,
+        datum: Any,
+        coding: StoreType = StoreType.COMPRESSED,
+        ex: int = 3600,
+    ) -> None:
+        """Enqueue a datum into a queue
+
+        Args:
+            key (str): key is the queue name
+            datum (Any): datum to be enqueued
+            coding (StoreType, optional): The encoding type to be used. Defaults to StoreType.COMPRESSED.
+        """
+        # Creates an internal key representation with User's key and Store Type Encoding
+        skey = key if type(key) is str else str(key, "utf-8")
+        mapped_key = f"/{self.store_name}/data/{skey}"
+
+        self.keyname_map[skey] = {
+            "data": mapped_key,
+            "dtsize": 0,
+            "coding": coding.value,
+            "chunks": 0,
+        }
+
+        # Encode the data and push it into the queue
+        encoded_data = self.serializer[coding.value].encode(datum)
+
+        with self.con.pipeline() as pipe:
+            for kk, vv in self.keyname_map[skey].items():
+                k = f"{self.root_diretory}/{skey}"
+                pipe.hset(k, kk, vv)
+            pipe.expire(k, ex)
+            pipe.rpush(mapped_key, encoded_data)
+            pipe.expire(mapped_key, ex)
+            pipe.sadd(self.root_diretory, key)
+            pipe.execute()
+
+        return
+
+    def dequeue(
+        self, key: str, coding: StoreType = StoreType.COMPRESSED, timeout: int = 0
+    ) -> Any:
+        """Dequeue an item from the queue
+
+        Args:
+            key (str): key is the queue name
+            timeout (int, optional): Timeout in seconds (if the queue is empty). Defaults to 0 that means: wait for ever.
+
+        Returns:
+            Any: The datum dequeued from the queue, otherwise None
+        """
+        # try to find a key mapping in the L1 or in the external memory
+        mapped_key, data_size, coding, chunks = self.__find_mapped_key(key)
+
+        if mapped_key is None:
+            return None
+
+        # try to pop an element from the queue
+        item = self.con.blpop(mapped_key, timeout)
+        # if found, decode the datum, else, return None
+        if item:
+            return self.serializer[coding].decode(item[1])
+        return item
+
     def delete(self, key: str) -> None:
         # try to find a key mapping in the L1 or in the external memory
         # if it has been found, delete the storage key, the key from the storage mapping
         # and from L1
         skey = key if type(key) is str else str(key, "utf-8")
-        mapped_key, _ = self.__find_mapped_key(skey)
+        mapped_key, dtsize, coding, n_chunks = self.__find_mapped_key(key)
+
         if mapped_key:
             with self.con.pipeline() as pipe:
                 k = f"{self.root_diretory}/{skey}"
-                pipe.delete(mapped_key)
+
+                for this_chunk in range(n_chunks):
+                    pipe.delete(f"{mapped_key}:{this_chunk}")
+                # Read the tail from the DataStore
+                if int(dtsize % self.chunk_size) > 0:
+                    pipe.delete(f"{mapped_key}:{n_chunks}")
+
                 pipe.delete(k)
                 pipe.srem(self.root_diretory, skey)
                 pipe.execute()

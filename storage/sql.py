@@ -37,6 +37,10 @@ class SqlStorage(object):
         df = pd.read_sql(f"SELECT * FROM {table_name}", self.db_connection)
         return df
 
+    def dump_dataframe(self, table_name: str, df):
+        df.to_sql(table_name, self.db_connection, if_exists="replace", index=False)
+        return
+
     def commit(self):
         self.db_connection.commit()
         return
