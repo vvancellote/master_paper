@@ -59,16 +59,12 @@ def main():
         pool.current(f0)
         result.append(f0)
 
-        freq = 100
-        if (file_id % freq) == (freq / 2):
-            f = dump_statistics(f"GENERAL-{file_id}", f0, statistics_dir)
-
     for ready_data in result:
         meta_group, meta_day = ready_data.result()
         tag = f"{meta_group}-{meta_day}"
         logging.info(f"Workflow FINISHED with {tag}")
 
-    f = dump_statistics(f"GENERAL-{len(worklist)}", "END", statistics_dir)
+    f = dump_statistics(f"GENERAL", "END", statistics_dir)
     logging.info(f"Workflow DUMPING STATS.")
     f.result()
 
