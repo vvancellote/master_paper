@@ -325,7 +325,7 @@ def calculate_dayly_statistics(
         return (meta_group, meta_day)
 
     data_frame["NEWDATE"] = pd.to_datetime(
-        data_frame["DATE"], format="%d-%m-%Y %H:%M:%S", errors="coerce"
+        data_frame["DATE"], format="%m-%d-%Y %H:%M:%S", errors="coerce"
     )
 
     data_frame["NDATE"] = data_frame["NEWDATE"]
@@ -481,7 +481,7 @@ def dump_statistics(
         item = memory.dequeue("STATS")
 
     df = pd.DataFrame(statistics_dict)
-    df.to_parquet(f"{directory}/GENERAL.parquet")
+    df.to_parquet(f"{directory}/{tag}-STATS.parquet")
 
     item = memory.dequeue("METASTAT")
     while item != "END_SENTINEL":

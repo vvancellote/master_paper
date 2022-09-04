@@ -41,7 +41,7 @@ def main():
 
     worklist = memory.get("WORKFLOW")
 
-    pool = CircularList(22)
+    pool = CircularList(23)
 
     database_dir = "../processed/database"
     metadata_dir = "../processed/metadata"
@@ -49,7 +49,7 @@ def main():
 
     for file_id, zip_file_name in enumerate(worklist):
         f0 = read_unique_entries_from_file(
-            f"busdata/{zip_file_name}.zip", pool.next(), database_dir
+            f"busdata/{zip_file_name}.zip", pool.next(), metadata_dir
         )
         f0 = filter_entries_pipeline(f0)
         f0 = dump_entries_into_database(f0, database_dir)
@@ -59,7 +59,8 @@ def main():
         pool.current(f0)
         result.append(f0)
 
-        if (file_id % 100) == 0:
+        freq = 100
+        if (file_id % freq) == (freq / 2):
             f = dump_statistics(f"GENERAL-{file_id}", f0, statistics_dir)
 
     for ready_data in result:
