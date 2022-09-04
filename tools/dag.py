@@ -12,6 +12,13 @@ from parsl.addresses import address_by_hostname, address_by_query, address_by_ro
 
 from storage import DataStorage
 
+from itertools import islice
+
+
+def chunk(arr_range, arr_size):
+    arr_range = iter(arr_range)
+    return iter(lambda: tuple(islice(arr_range, arr_size)), ())
+
 
 class CircularList(object):
     def __init__(self, slots: int) -> None:

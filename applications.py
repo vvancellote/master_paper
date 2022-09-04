@@ -22,7 +22,7 @@ __maintainer__ = "Diego Carvalho"
 __email__ = "d.carvalho@ieee.org"
 __status__ = "Research"
 
-from typing import Any, Tuple
+from typing import Any, List, Tuple
 from parsl import python_app
 
 # Let's test the lint
@@ -30,7 +30,10 @@ from parsl import python_app
 
 @python_app
 def read_unique_entries_from_file(
-    zip_file_name: str, next_pipe: Any = None, directory: str = "metadata"
+    zip_file_name: str,
+    next_pipe: Any = None,
+    directory: str = "metadata",
+    squeue: str = "Q",
 ) -> Tuple[str, str]:
     import zipfile
     import json as js
@@ -133,13 +136,13 @@ def read_unique_entries_from_file(
     meta_stat["DATASET"] = tag
     meta_stat["FUNC"] = "read_unique_entries_from_file"
     meta_stat["TIME"] = end - start
-    memory.enqueue("METASTAT", meta_stat)
+    memory.enqueue(f"{squeue}-METASTAT", meta_stat)
 
     return (meta_group, meta_day)
 
 
 @python_app
-def filter_entries_pipeline(data_future) -> Tuple[str, str]:
+def filter_entries_pipeline(data_future: Any, squeue: str) -> Tuple[str, str]:
     import pandas as pd
     import geopandas as gpd
     from storage import DataStorage
@@ -200,14 +203,14 @@ def filter_entries_pipeline(data_future) -> Tuple[str, str]:
     meta_stat["DATASET"] = tag
     meta_stat["FUNC"] = "filter_entries_pipeline"
     meta_stat["TIME"] = end - start
-    memory.enqueue("METASTAT", meta_stat)
+    memory.enqueue(f"{squeue}-METASTAT", meta_stat)
 
     return (meta_group, meta_day)
 
 
 @python_app
 def dump_entries_into_database(
-    data_future: Any, directory: str = "database"
+    data_future: Any, directory: str = "database", squeue: str = "Q"
 ) -> Tuple[str, str]:
     import logging
     from storage import DataStorage
@@ -241,13 +244,13 @@ def dump_entries_into_database(
     meta_stat["DATASET"] = tag
     meta_stat["FUNC"] = "dump_entries_into_database"
     meta_stat["TIME"] = end - start
-    memory.enqueue("METASTAT", meta_stat)
+    memory.enqueue(f"{squeue}-METASTAT", meta_stat)
 
     return (meta_group, meta_day)
 
 
 @python_app
-def release_shared_memory(data_future) -> Tuple[str, str]:
+def release_shared_memory(data_future: Any, squeue: str) -> Tuple[str, str]:
     from storage import DataStorage
     import time
 
@@ -265,14 +268,14 @@ def release_shared_memory(data_future) -> Tuple[str, str]:
     meta_stat["DATASET"] = tag
     meta_stat["FUNC"] = "release_shared_memory"
     meta_stat["TIME"] = end - start
-    memory.enqueue("METASTAT", meta_stat)
+    memory.enqueue(f"{squeue}-METASTAT", meta_stat)
 
     return (meta_group, meta_day)
 
 
 @python_app
 def calculate_dayly_statistics(
-    data_future: Any, directory: str = "statdata"
+    data_future: Any, directory: str = "statdata", squeue: str = "Q"
 ) -> Tuple[str, str]:
     import logging
     from storage import DataStorage
@@ -444,21 +447,21 @@ def calculate_dayly_statistics(
 
         data_frame_result.to_parquet(f"{directory}/{tag}.parquet")
 
-    memory.enqueue("STATS", statistics_dict)
+    memory.enqueue(f"{squeue}-STATS", statistics_dict)
 
     end = time.time()
     meta_stat = dict()
     meta_stat["DATASET"] = tag
     meta_stat["FUNC"] = "calculate_dayly_statistics"
     meta_stat["TIME"] = end - start
-    memory.enqueue("METASTAT", meta_stat)
+    memory.enqueue(f"{squeue}-METASTAT", meta_stat)
 
     return (meta_group, meta_day)
 
 
 @python_app
 def dump_statistics(
-    tag: str, data_future: Any, directory: str = "statdata"
+    squeue: str, directory: str = "statdata", inputs: List = []
 ) -> Tuple[str, str]:
     from storage import DataStorage
     from collections import defaultdict
@@ -471,23 +474,23 @@ def dump_statistics(
     statistics_dict = defaultdict(list)
     meta_statistics_dict = defaultdict(list)
 
-    memory.enqueue("STATS", "END_SENTINEL")
-    memory.enqueue("METASTAT", "END_SENTINEL")
+    memory.enqueue(f"{squeue}-STATS", "END_SENTINEL")
+    memory.enqueue(f"{squeue}-METASTAT", "END_SENTINEL")
 
-    item = memory.dequeue("STATS")
+    item = memory.dequeue(f"{squeue}-STATS")
     while item != "END_SENTINEL":
         for k, v in item.items():
             statistics_dict[k].append(v)
-        item = memory.dequeue("STATS")
+        item = memory.dequeue(f"{squeue}-STATS")
 
     df = pd.DataFrame(statistics_dict)
-    df.to_parquet(f"{directory}/{tag}-STATS.parquet")
+    df.to_parquet(f"{directory}/{squeue}-STATS.parquet")
 
-    item = memory.dequeue("METASTAT")
+    item = memory.dequeue(f"{squeue}-METASTAT")
     while item != "END_SENTINEL":
         for k, v in item.items():
             meta_statistics_dict[k].append(v)
-        item = memory.dequeue("METASTAT")
+        item = memory.dequeue(f"{squeue}-METASTAT")
 
     meta_statistics_dict["DATASET"].append("ALL_DATASETS")
     meta_statistics_dict["FUNC"].append("dump_statistics")
@@ -495,6 +498,9 @@ def dump_statistics(
     meta_statistics_dict["TIME"].append(end - start)
 
     df = pd.DataFrame(meta_statistics_dict)
-    df.to_parquet(f"{directory}/{tag}-METASTAT.parquet")
+    df.to_parquet(f"{directory}/{squeue}-METASTAT.parquet")
 
-    return data_future
+    memory.delete_queue(f"{squeue}-STATS")
+    memory.delete_queue(f"{squeue}-METASTAT")
+
+    return squeue

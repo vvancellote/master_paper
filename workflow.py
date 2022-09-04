@@ -4,6 +4,7 @@ import statistics
 import sys
 from storage import DataStorage
 from tools.dag import (
+    chunk,
     get_parsl_config,
     remove_done_workflow,
     CircularList,
@@ -35,7 +36,7 @@ def main():
     parsl.load(get_parsl_config("htex_Local"))
     logging.info(f"Workflow IS RUNNING.")
 
-    result = list()
+    stat_result = list()
 
     remove_done_workflow()
 
@@ -47,26 +48,27 @@ def main():
     metadata_dir = "../processed/metadata"
     statistics_dir = "../processed/statdata"
 
-    for file_id, zip_file_name in enumerate(worklist):
-        f0 = read_unique_entries_from_file(
-            f"busdata/{zip_file_name}.zip", pool.next(), metadata_dir
-        )
-        f0 = filter_entries_pipeline(f0)
-        f0 = dump_entries_into_database(f0, database_dir)
-        f0 = calculate_dayly_statistics(f0, statistics_dir)
-        f0 = release_shared_memory(f0)
+    for ch_id, chunk_list in enumerate(chunk(worklist, 50)):
+        stat_queue = f"Q{ch_id}"
+        result = list()
+        for zip_file_name in chunk_list:
+            f0 = read_unique_entries_from_file(
+                f"busdata/{zip_file_name}.zip", pool.next(), metadata_dir, stat_queue
+            )
+            f0 = filter_entries_pipeline(f0, stat_queue)
+            f0 = dump_entries_into_database(f0, database_dir, stat_queue)
+            f0 = calculate_dayly_statistics(f0, statistics_dir, stat_queue)
+            f0 = release_shared_memory(f0, stat_queue)
 
-        pool.current(f0)
-        result.append(f0)
+            pool.current(f0)
+            result.append(f0)
 
-    for ready_data in result:
-        meta_group, meta_day = ready_data.result()
-        tag = f"{meta_group}-{meta_day}"
+        f = dump_statistics(stat_queue, "END", statistics_dir, inputs=result)
+        stat_result.append(f)
+
+    for ready_data in stat_result:
+        tag = ready_data.result()
         logging.info(f"Workflow FINISHED with {tag}")
-
-    f = dump_statistics(f"GENERAL", "END", statistics_dir)
-    logging.info(f"Workflow DUMPING STATS.")
-    f.result()
 
 
 if __name__ == "__main__":

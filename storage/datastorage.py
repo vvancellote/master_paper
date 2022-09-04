@@ -357,6 +357,12 @@ class DataStorage(Borg):
             return self.serializer[coding].decode(item[1])
         return item
 
+    def delete_queue(self, key: str) -> None:
+        mapped_key, data_size, coding, chunks = self.__find_mapped_key(key)
+        self.con.delete(mapped_key)
+        self.con.srem(self.root_diretory, key)
+        return
+
     def delete(self, key: str) -> None:
         # try to find a key mapping in the L1 or in the external memory
         # if it has been found, delete the storage key, the key from the storage mapping
