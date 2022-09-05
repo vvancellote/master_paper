@@ -32,6 +32,7 @@ from parsl import python_app
 def read_unique_entries_from_file(
     zip_file_name: str,
     next_pipe: Any = None,
+    database_dir: str = "database",
     directory: str = "metadata",
     squeue: str = "Q",
 ) -> Tuple[str, str]:
@@ -40,7 +41,7 @@ def read_unique_entries_from_file(
     import pandas as pd
     from storage import DataStorage
     from tools.dag import decode_meta_name
-    from os.path import isdir
+    from os.path import isdir, isfile
     from os import mkdir
     import time
 
@@ -73,6 +74,10 @@ def read_unique_entries_from_file(
     meta_group, meta_day = tag[:2], tag[3:]  # format: G1-2017-07-12
 
     memory.set(f"STATUS-{tag}", "read_unique_entries_from_file")
+
+    # if isfile(f"{directory}/{tag}-ERROR-PH1.parquet"):
+    #     if isfile(f"{database_dir}/{tag}.parquet"):
+    #         df = pd.read_parquet(f"{database_dir}/{tag}.parquet")
 
     try:
         with zipfile.ZipFile(zip_file_name) as file_handler:

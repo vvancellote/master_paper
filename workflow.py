@@ -53,7 +53,11 @@ def main():
         result = list()
         for zip_file_name in chunk_list:
             f0 = read_unique_entries_from_file(
-                f"busdata/{zip_file_name}.zip", pool.next(), metadata_dir, stat_queue
+                f"busdata/{zip_file_name}.zip",
+                pool.next(),
+                database_dir,
+                metadata_dir,
+                stat_queue,
             )
             f0 = filter_entries_pipeline(f0, stat_queue)
             f0 = dump_entries_into_database(f0, database_dir, stat_queue)
@@ -63,7 +67,7 @@ def main():
             pool.current(f0)
             result.append(f0)
 
-        f = dump_statistics(stat_queue, "END", statistics_dir, inputs=result)
+        f = dump_statistics(stat_queue, statistics_dir, inputs=result)
         stat_result.append(f)
 
     for ready_data in stat_result:
