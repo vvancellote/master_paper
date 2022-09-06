@@ -22,7 +22,7 @@ __maintainer__ = "Diego Carvalho"
 __email__ = "d.carvalho@ieee.org"
 __status__ = "Research"
 
-from typing import Any, List, Tuple
+from typing import Any, Dict, List, Tuple
 from parsl import python_app
 
 # Let's test the lint
@@ -298,6 +298,36 @@ def calculate_dayly_statistics(
     if not isdir(directory):
         mkdir(directory)
 
+    def init_statistics_dict(ndf, nbus) -> Dict:
+        statistics_dict = dict()
+        statistics_dict["DAY"] = tag
+        statistics_dict["N_OBS"] = ndf
+        statistics_dict["N_BUS"] = nbus
+        statistics_dict["FILT_OBS"] = 0
+        statistics_dict["DIST_AVG"] = np.nan
+        statistics_dict["DIST_STD"] = np.nan
+        statistics_dict["DIST_MAX"] = np.nan
+        statistics_dict["DIST_MAX_BUS"] = "NONE"
+        statistics_dict["INTERVAL_AVG"] = np.nan
+        statistics_dict["INTERVAL_STD"] = np.nan
+        statistics_dict["INTERVAL_MIN"] = np.nan
+        statistics_dict["INTERVAL_MAX"] = np.nan
+        statistics_dict["INTERVAL_MIN_BUS"] = "NONE"
+        statistics_dict["INTERVAL_MAX_BUS"] = "NONE"
+        statistics_dict["AVGSPEED_AVG"] = np.nan
+        statistics_dict["AVGSPEED_STD"] = np.nan
+        statistics_dict["AVGSPEED_MIN"] = np.nan
+        statistics_dict["AVGSPEED_MAX"] = np.nan
+        statistics_dict["AVGSPEED_MIN_BUS"] = "NONE"
+        statistics_dict["AVGSPEED_MAX_BUS"] = "NONE"
+        statistics_dict["VELOCITY_AVG"] = np.nan
+        statistics_dict["VELOCITY_STD"] = np.nan
+        statistics_dict["VELOCITY_MIN"] = np.nan
+        statistics_dict["VELOCITY_MAX"] = np.nan
+        statistics_dict["VELOCITY_MIN_BUS"] = "NONE"
+        statistics_dict["VELOCITY_MAX_BUS"] = "NONE"
+        return statistics_dict
+
     def haversine(lat1, lon1, lat2, lon2, to_radians=True, earth_radius=6371):
         """
         slightly modified version: of http://stackoverflow.com/a/29546836/2901002
@@ -321,8 +351,6 @@ def calculate_dayly_statistics(
     meta_group, meta_day = data_future
     tag = f"{meta_group}-{meta_day}"
     memory = DataStorage("bus")
-
-    statistics_dict = dict()
 
     data_frame = memory.get(tag)
 
@@ -349,12 +377,10 @@ def calculate_dayly_statistics(
     new_columns.append("INTERVAL")
     new_columns.append("AVGSPEED")
 
+    statistics_dict = init_statistics_dict(len(data_frame), len(busid_list))
+
     data_frame_result = pd.DataFrame(columns=new_columns)
     data_frame_list = list()
-
-    statistics_dict["DAY"] = tag
-    statistics_dict["N_OBS"] = len(data_frame)
-    statistics_dict["N_BUS"] = len(busid_list)
 
     if len(busid_list) > 0:
 
